@@ -10,7 +10,8 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 
-from magic.util.checkpoint import  restore_single_checkpoint, restore_multi_checkpoint, save_checkpoint, cure_checkpoint
+from magic.util.parameter_check import check_and_get_model_params, check_and_get_optimizer_params, check_and_get_scheduler_params
+from magic.util.checkpoint import  restore_hyperparameter_checkpoint, restore_single_checkpoint, restore_multi_checkpoint, save_checkpoint, cure_checkpoint
 from magic.util.logger import get_logging_handle
 from magic.data.stats import SingleSubjectTrainingStats, MultiTrainingStats
 import magic.util.ensembles as ensembles
@@ -18,9 +19,42 @@ import magic.util.util as util
 from magic.util.io_helper import create_exp_dir
 
 
-ray.init()
+def get_checkpoint_path(checkpoint_dir_path, original_epochs):
+    path_to_checkpoint = os.path.join(checkpoint_dir_path, 'checkpoint.pth.tar')
+    #load checkpoint to check status
+    if os.path.exists(path_to_checkpoint):
+        try:
+            checkpoint = torch.load(path_to_checkpoint)
+        except:
+            #check if checkpoint1.pth.tar exists -> if it does, it means that there was a crash during the checkpoint save call
+            if os.path.exists(os.path.join(checkpoint_dir_path, 'checkpoint1.pth.tar')):
+                cure_checkpoint(checkpoint_dir_path)
+                try:
+                    #load and restore the correct file
+                    checkpoint = torch.load(path_to_checkpoint)
+                except:
+                    #backup checkpoint file is corrupt too
+                    checkpoint = None
+            else:
+                #checkpoint file is corrupt and backup is not present
+                checkpoint = None
 
-@ray.remote(num_gpus=0.05)
+        #check if checkpoint file was read
+        if checkpoint is not None:
+            #check if the training had finished
+            if checkpoint['epoch'] < original_epochs:
+                return checkpoint_dir_path
+            else:
+                #execution was completed.
+                return None
+        else:
+            #redo this experiment
+            return ''
+    else:
+        #no checkpoint found, redo this experiment
+        return ''
+
+@ray.remote(num_gpus=0.025)
 class SingleSubjectExperiment(object):
     def __init__(self, model_factory, data_loader_method, optimizer_factory, scheduler_factory, criterion, metric, args):
 
@@ -70,7 +104,7 @@ class SingleSubjectExperiment(object):
 
         self.model.cuda()
         np.random.seed(self.args.seed)
-        torch.cuda.set_device(self.args.gpu)
+        #torch.cuda.set_device(self.args.gpu)
         #cudnn.benchmark = True
         torch.manual_seed(self.args.seed)
         #cudnn.enabled=True
@@ -100,16 +134,19 @@ class SingleSubjectExperiment(object):
                 best_validation_obj = valid_objective
                 is_best = True
 
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': self.model.state_dict(),
-                'best_valid_obj': best_validation_obj,
-                'optimizer' : self.optimizer.state_dict(),
-                'scheduler' : self.scheduler.state_dict(),
-                'stats' : self.stats
-                }, is_best, self.args.save)
 
-            ensembles.save_best_models(self.best_models, self.args.save)
+            if epoch % self.args.checkpoint_frequency == 0: 
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': self.model.state_dict(),
+                    'best_valid_obj': best_validation_obj,
+                    'optimizer' : self.optimizer.state_dict(),
+                    'scheduler' : self.scheduler.state_dict(),
+                    'stats' : self.stats
+                    }, is_best, self.args.save)
+
+                if self.args.save_best_models:
+                    ensembles.save_best_models(self.best_models, self.args.save)
 
             self.stats.save(self.args.save)
 
@@ -183,7 +220,7 @@ class Experiment():
         self.args = args
         self.setup()
         if args.resume != '':
-            restore_multi_checkpoint(self, self.args, self.logging_handle)
+            restore_multi_checkpoint(self, self.args.resume, self.logging_handle)
 
         else:
             self.subjects = subjects
@@ -218,32 +255,11 @@ class Experiment():
 
                 rep_dir = 'rep_%d' % rep
                 checkpoint_dir_path = os.path.join(self.parent_results_dir, subject_dir, rep_dir)
-                path_to_checkpoint = os.path.join(checkpoint_dir_path, 'checkpoint.pth.tar')
-                #load checkpoint to check status
-                if os.path.exists(path_to_checkpoint):
-                    try:
-                        checkpoint = torch.load(path_to_checkpoint)
-                    except:
-                        #check if checkpoint1.pth.tar exists -> if it does, it means that there was a crash when writing the file
-                        #restore the correct file
-                        if os.path.exists(os.path.join(checkpoint_dir_path, 'checkpoint1.pth.tar')):
-                            cure_checkpoint(checkpoint_dir_path)
-                            try:
-                                checkpoint = torch.load(path_to_checkpoint)
-                            except:
-                                #checkpoint file is corrupt
-                                details_for_subject[rep_dir] = ''
-                                continue
-                        else:
-                            #checkpoint file is corrupt
-                            details_for_subject[rep_dir] = ''
-                            continue
+                path = get_checkpoint_path(checkpoint_dir_path, self.args.epochs)
+                #None represents that the training had already finisshed
+                if path is not None:
+                    details_for_subject[rep_dir] = path
 
-                    #check if the training had finished
-                    if checkpoint['epoch'] < self.args.epochs:
-                        details_for_subject[rep_dir] = checkpoint_dir_path  
-                else:
-                    details_for_subject[rep_dir] = ''
                 
             if len(details_for_subject) > 0:
                 self.experiments[subject] = details_for_subject
@@ -276,7 +292,8 @@ class Experiment():
             for key, resume in experiments.items():
                 self.args.resume = resume
                 self.args.save = key
-                exp = SingleSubjectExperiment.remote(self.model_factory, self.data_loader_method, self.optimizer_factory, self.scheduler_factory,  self.criterion, self.metric, copy.copy(self.args))
+                exp = SingleSubjectExperiment.remote(self.model_factory, self.data_loader_method, self.optimizer_factory, \
+                                            self.scheduler_factory,  self.criterion, self.metric, copy.copy(self.args))
                 actors.append(exp)
         
         n_actors = len(actors)
@@ -294,7 +311,7 @@ class Experiment():
         run_actors(actors, futures, n_actors_to_run)
 
         while n_finished < n_actors:
-            finished, running = ray.wait(futures)#, num_returns = len(futures))
+            finished, running = ray.wait(futures)
             futures = running
             n_finished += len(finished)
             run_actors(actors, futures, len(finished))
@@ -313,3 +330,152 @@ class Experiment():
         self.args.resume = self.parent_results_dir
         return self.stats
 
+
+
+class HyperparameterExperiment():
+    def __init__(self, dataset_location, subjects, data_loader_method, criterion, metric, hyperparams, args):
+        super(HyperparameterExperiment, self).__init__()
+
+        self.args = args
+        self.sep = '__'
+        self.subject_string = 'subject_{}'
+        self.param_string = 'param_%d'
+        self.rep_string = 'rep_%d'
+        self.setup()
+        
+        if args.resume != '':
+            restore_hyperparameter_checkpoint(self, self.args.resume, self.logging_handle)
+
+        else:
+            self.subjects = subjects
+            self.dataset_location = dataset_location
+            self.data_loader_method = data_loader_method
+            self.criterion = criterion
+            self.metric = metric
+            self.hyperparams = hyperparams
+            self.n_params = len(hyperparams)
+            #save parameters
+            save_checkpoint({
+                'args': jsonpickle.encode(self.args),
+                'subjects': self.subjects,
+                'dataset_location':self.dataset_location,
+                'data_loader_method':self.data_loader_method,
+                'hyperparams': self.hyperparams,
+                'criterion': self.criterion,
+                'metric' : metric,
+                'parent_results_dir':self.parent_results_dir,
+            }, False, self.parent_results_dir)
+
+        self.experiments = {}
+        for subject in self.subjects:
+            details_for_subject = {}
+            subject_dir = self.subject_string.format(subject)
+            for param_idx in range(self.n_params):
+                param_dir =  self.param_string%param_idx
+                for fold in range(self.args.folds):
+
+                    rep_dir = self.rep_string%fold
+                    key = param_dir + self.sep + rep_dir
+
+                    checkpoint_dir_path = os.path.join(self.parent_results_dir, subject_dir, param_dir, rep_dir)
+                    path = get_checkpoint_path(checkpoint_dir_path, self.hyperparams[param_idx]['epochs'])
+                    
+                    #None represents that the training had already finisshed
+                    if path is not None:
+                        details_for_subject[key] = path
+                
+            if len(details_for_subject) > 0:
+                self.experiments[subject] = details_for_subject
+
+
+        self.stats = MultiTrainingStats()
+
+    def setup(self):
+
+        if self.args.resume != '':
+            self.args.results_dir = self.args.resume
+        else:
+            self.args.save = '{}-{}'.format('train-hyperparameter-search', time.strftime("%Y-%m-%d--%H-%M-%S"))
+            self.args.results_dir = os.path.join(self.args.results_dir, self.args.save)
+
+        self.parent_results_dir = self.args.results_dir
+
+        create_exp_dir(self.args.results_dir)
+        self.logging_handle = get_logging_handle(self.args.results_dir)
+
+    def run(self):
+        actors = []
+        self.logging_handle.info('Beginning the run method')
+        for subject, experiments in self.experiments.items():
+            for param_idx in range(self.n_params):
+                param_dir =  self.param_string%param_idx
+                for fold in range(self.args.folds):
+                    rep_dir = self.rep_string%fold
+                    key = param_dir + self.sep + rep_dir
+                    resume = self.experiments[subject].get(key, None)
+
+                    #the experiment had finished.
+                    if resume is None:
+                        continue
+                    args = copy.copy(self.args)
+
+                    args.results_dir = os.path.join(self.parent_results_dir, self.subject_string.format(subject), param_dir)
+                    args.dataset_location = self.dataset_location
+                    args.data_filename = self.subjects[subject]
+                    args.resume = resume
+                    args.save = rep_dir
+                    args.partition_file_name = args.partition_file_name + '_%s.pickle'%str(subject)
+                    args.test_set = False
+
+                    #get and set parameters
+                    hyperparams = self.hyperparams[param_idx]
+                    args.epochs = hyperparams['epochs']
+                    args.learning_rate = hyperparams['learning_rate']
+                    args.time_delay_window_size =  hyperparams['time_delay_window_size']
+
+                    (model_factory, args.model_args) = hyperparams['model']
+                    (optimizer_factory, optimizer_args) = hyperparams['optimizer']
+
+                    check_and_get_optimizer_params(optimizer_factory, optimizer_args, args)
+                    (scheduler_factory, scheduler_args) = hyperparams['scheduler']
+                    check_and_get_scheduler_params(scheduler_factory, scheduler_args, args)
+
+
+                    
+                    exp = SingleSubjectExperiment.remote(model_factory, self.data_loader_method, optimizer_factory, scheduler_factory,  self.criterion, self.metric, args)
+                    actors.append(exp)
+        
+        n_actors = len(actors)
+        n_finished = 0
+        n_actors_to_run = 20
+        futures = []
+
+        def run_actors(actors, futures, n_actors_to_run):
+            for i, actor in enumerate(actors):
+                futures.append(actor.run.remote())
+                actors.remove(actor)
+                if i == n_actors_to_run - 1:
+                    break
+
+        run_actors(actors, futures, n_actors_to_run)
+
+        while n_finished < n_actors:
+            finished, running = ray.wait(futures)
+            futures = running
+            n_finished += len(finished)
+            run_actors(actors, futures, len(finished))
+
+
+        self.logging_handle.info('All models have finished training.')
+        #re run loops to collect all the data together
+
+        # for subject, file_name in self.subjects.items():
+        #     self.args.results_dir = os.path.join(self.parent_results_dir, 'subject_{}'.format(subject))
+        #     for rep in range(self.args.reps_per_subject):
+        #         self.args.save = 'rep_%d' % rep
+        #         stat_file_path = os.path.join(self.args.results_dir, self.args.save, 'stat.pickle')
+        #         self.stats.add_stat_for_subject(subject, stat_file_path)
+
+        # self.stats.save(self.parent_results_dir)
+        # self.args.resume = self.parent_results_dir
+        # return self.stats

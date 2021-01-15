@@ -3,15 +3,19 @@ import os
 import numpy as np
 
 class SingleSubjectTrainingStats():
-    def __init__(self, obj=None):
+    def __init__(self, path=None):
         super(SingleSubjectTrainingStats, self).__init__()
-        if obj is None:
+        if path is None:
+
             self.training_losses = np.array([]).reshape(-1)
             self.training_objectives = np.array([]).reshape(-1)
             self.testing_losses = np.array([]).reshape(-1)
             self.testing_objectives = np.array([]).reshape(-1)
 
         else:
+            #read stat object
+            with open(path, 'rb') as f:
+                obj = pickle.load(f)
             self.training_losses = obj['training_losses']
             self.training_objectives = obj['training_objectives']
             self.testing_losses = obj['testing_losses']
@@ -31,6 +35,14 @@ class SingleSubjectTrainingStats():
 
         self.testing_losses = np.vstack((self.testing_losses, stat2.testing_losses.reshape(-1)))
         self.testing_objectives = np.vstack((self.testing_objectives, stat2.testing_objectives.reshape(-1)))
+
+    def get_running_average(self, n):
+        training_loss = np.convolve(self.training_losses, np.ones(n)/n, mode='valid')
+        training_objectives = np.convolve(self.training_objectives, np.ones(n)/n, mode='valid')
+        testing_losses = np.convolve(self.testing_losses, np.ones(n)/n, mode='valid')
+        testing_objectives = np.convolve(self.testing_objectives, np.ones(n)/n, mode='valid')
+
+        return training_loss, training_objectives, testing_losses, testing_objectives
 
     def get_stats(self):
         return self.training_losses, self.training_objectives, \

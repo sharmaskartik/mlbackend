@@ -41,12 +41,13 @@ def save_checkpoint(state, is_best, path):
     shutil.copyfile(filename2, best_filename)
 
 
-def restore_multi_checkpoint(experiment, args, logging_handle):
+def restore_multi_checkpoint(experiment, path, logging_handle):
 
-    checkpoint_path = os.path.join(args.resume, 'checkpoint.pth.tar')
+    checkpoint_path = os.path.join(path, 'checkpoint.pth.tar')
 
     if os.path.isfile(checkpoint_path):
-        logging_handle.info("Loading checkpoint '{}'".format(checkpoint_path))
+        if logging_handle is not None:
+            logging_handle.info("Loading checkpoint '{}'".format(checkpoint_path))
         checkpoint = torch.load(checkpoint_path)
 
         experiment.args = jsonpickle.decode(checkpoint['args'])
@@ -60,11 +61,37 @@ def restore_multi_checkpoint(experiment, args, logging_handle):
         experiment.dataset_location = checkpoint['dataset_location']
         experiment.parent_results_dir = checkpoint['parent_results_dir']
 
-        logging_handle.info("Checkpoint loading complete '{}'".format(args.resume))
+        if logging_handle is not None:
+            logging_handle.info("Checkpoint loading complete '{}'".format(path))
     else:
-        logging_handle.info("No checkpoint found at '{}'".format(args.resume))
+        if logging_handle is not None:
+            logging_handle.info("No checkpoint found at '{}'".format(path))
         exit()
 
+def restore_hyperparameter_checkpoint(experiment, path, logging_handle):
+    checkpoint_path = os.path.join(path, 'checkpoint.pth.tar')
+
+    if os.path.isfile(checkpoint_path):
+        if logging_handle is not None:
+            logging_handle.info("Loading checkpoint '{}'".format(checkpoint_path))
+        checkpoint = torch.load(checkpoint_path)
+
+        experiment.args = jsonpickle.decode(checkpoint['args'])
+        experiment.subjects = copy.deepcopy(checkpoint['subjects'])
+        experiment.dataset_location = checkpoint['dataset_location']
+        experiment.data_loader_method = checkpoint['data_loader_method']
+        experiment.hyperparams = checkpoint['hyperparams']
+        experiment.criterion = checkpoint['criterion']
+        experiment.metric = checkpoint['metric']
+        experiment.parent_results_dir = checkpoint['parent_results_dir']
+        experiment.n_params = len(experiment.hyperparams)
+
+        if logging_handle is not None:
+            logging_handle.info("Checkpoint loading complete '{}'".format(path))
+    else:
+        if logging_handle is not None:
+            logging_handle.info("No checkpoint found at '{}'".format(path))
+        exit()
 
 def cure_checkpoint(path):
     filename1 = os.path.join(path, 'checkpoint1.pth.tar')
