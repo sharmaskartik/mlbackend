@@ -10,13 +10,13 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 
-from magic.util.parameter_check import check_and_get_model_params, check_and_get_optimizer_params, check_and_get_scheduler_params
-from magic.util.checkpoint import  restore_hyperparameter_checkpoint, restore_single_checkpoint, restore_multi_checkpoint, save_checkpoint, cure_checkpoint
-from magic.util.logger import get_logging_handle
-from magic.data.stats import SingleSubjectTrainingStats, MultiTrainingStats
-import magic.util.ensembles as ensembles
-import magic.util.util as util
-from magic.util.io_helper import create_exp_dir
+from mlbackend.util.parameter_check import check_and_get_model_params, check_and_get_optimizer_params, check_and_get_scheduler_params
+from mlbackend.util.checkpoint import  restore_hyperparameter_checkpoint, restore_single_checkpoint, restore_multi_checkpoint, save_checkpoint, cure_checkpoint
+from mlbackend.util.logger import get_logging_handle
+from mlbackend.data.stats import SingleSubjectTrainingStats, MultiTrainingStats
+import mlbackend.util.ensembles as ensembles
+import mlbackend.util.util as util
+from mlbackend.util.io_helper import create_exp_dir
 
 
 def get_checkpoint_path(checkpoint_dir_path, original_epochs):

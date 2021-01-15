@@ -1,7 +1,7 @@
 import os
 from tarfile import RECORDSIZE
-from magic.data.stats import SingleSubjectTrainingStats
-from magic.util.checkpoint import restore_hyperparameter_checkpoint
+from mlbackend.data.stats import SingleSubjectTrainingStats
+from mlbackend.util.checkpoint import restore_hyperparameter_checkpoint
 import numpy as np
 import csv
 

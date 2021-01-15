@@ -1,5 +1,5 @@
 import os
-
+import shutil
 def create_exp_dir(path, scripts_to_save=None):
     os.makedirs(path, exist_ok=True)
     print('Experiment dir : {}'.format(path))

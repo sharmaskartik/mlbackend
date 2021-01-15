@@ -1,5 +1,5 @@
 import os
-import magic.util.ensembles as ensembles
+import mlbackend.util.ensembles as ensembles
 import torch
 import shutil
 import jsonpickle

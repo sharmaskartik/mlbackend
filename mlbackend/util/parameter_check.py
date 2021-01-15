@@ -1,5 +1,5 @@
-from magic.factory.optimizer import AdamFactory
-from magic.factory.scheduler import LRSchedulerFactory
+from mlbackend.factory.optimizer import AdamFactory
+from mlbackend.factory.scheduler import LRSchedulerFactory
 
 def check_and_get_model_params(model_class, scheduler_args, experiment_args):
     print('upup')

@@ -1,7 +1,7 @@
 from __future__ import annotations
-from magic.model_zoo.schirrmeister import DeepModel
-from magic.model_zoo.csu_p300 import p300Model
-from magic.model_zoo.eegnet import EEGNet
+from mlbackend.model_zoo.schirrmeister import DeepModel
+from mlbackend.model_zoo.csu_p300 import p300Model
+from mlbackend.model_zoo.eegnet import EEGNet
 from abc import ABC, abstractmethod
 class ModelFactory():
 

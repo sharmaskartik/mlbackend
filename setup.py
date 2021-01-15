@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-setup(name='magic',
+setup(name='mlbackend',
       version='0.1',
       description='Backend Setup for BCI Experiments',
       author='Kartikay Sharma',

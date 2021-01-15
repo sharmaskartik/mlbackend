@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
-from magic.data.stats import SingleSubjectTrainingStats
+from mlbackend.data.stats import SingleSubjectTrainingStats
 import os
 
 class PlotStatsForSingleSubject:
