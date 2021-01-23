@@ -7,7 +7,7 @@ import csv
 
 from numpy.lib.arraysetops import isin, unique
 
-def beautify_hyperparams(subject, hyperparams, metric, returns=['model', 'optimizer', \
+def beautify_hyperparams(subject, hyperparams, metrics, returns=['model', 'optimizer', \
                         'scheduler', 'learning_rate', 'epochs', 'time_delay_window_size']):
     result_string = [subject]
     if 'model' in returns:    
@@ -32,7 +32,8 @@ def beautify_hyperparams(subject, hyperparams, metric, returns=['model', 'optimi
     if 'time_delay_window_size' in returns:   
         result_string.extend([str(hyperparams['time_delay_window_size'])])
 
-    result_string.extend(['%.3f'%metric])
+    result_string.extend(['%.3f'%(metrics[0])])
+    result_string.extend(['%.3f'%(metrics[1])])
     return result_string
 
 def get_header(returns):
@@ -56,7 +57,8 @@ def get_header(returns):
     if 'time_delay_window_size' in returns:   
         result_string.extend(['Time Delay Window Size'])
 
-    result_string.extend(['Metric'])
+    result_string.extend(['Validation Metric'])
+    result_string.extend(['Test Metric'])
     return result_string
 
 
@@ -79,23 +81,31 @@ def display_hyperparameter_results(path, running_mean_length=10, top_n_params_pe
         results = []
         for param_idx in range(len(d.hyperparams)):
             param_dir =  param_string%param_idx
-            for fold in range(d.args.folds):
+            all_bsrs_for_param = []
+            for fold in range(d.args.reps):
 
                 rep_dir = rep_string%fold
 
                 stat_dir_path = os.path.join(path, subject_dir, param_dir, rep_dir)
                 stat_file = os.path.join(stat_dir_path, 'stat.pickle')
                 stat_obj = SingleSubjectTrainingStats(stat_file)
-                _, _, _, testing_running_mean = stat_obj.get_running_average(running_mean_length)
-                max_mean = np.max(testing_running_mean)
-                results.append([param_idx, max_mean])
+                _, _, _, validation_running_mean,_, test_running_mean = stat_obj.get_running_average(running_mean_length)
+                
+                max_validation_bsr = np.max(validation_running_mean)
+                max_test_bsr = np.max(test_running_mean)
+                
+                all_bsrs_for_param.append([max_validation_bsr, max_test_bsr])
+
+            all_bsrs_for_param = np.array(all_bsrs_for_param)
+            mean_valid_bsr, mean_test_bsr = np.mean(all_bsrs_for_param, axis=0)
+            results.append([param_idx, mean_valid_bsr, mean_test_bsr])
 
         
         results  = np.array(results)
         results = results[np.argsort(results[:, 1])[::-1]][:top_n_params_per_subject, :]
 
         for result in results:
-            line = beautify_hyperparams(subject, d.hyperparams[result[0]], result[1], returns=returns)
+            line = beautify_hyperparams(subject, d.hyperparams[result[0]], result[1:], returns=returns)
             writer.writerow(line)
                 
 
@@ -163,6 +173,6 @@ def display_hyperparameter_args(path, returns=['model', 'optimizer', 'scheduler'
 
 if __name__ == '__main__':
 
-    path = '/s/chopin/l/grad/kartikay/code/machine_learning/workspace/bci/bci_experiments/bci_experiments/experiments/csu_p300/logs/train-hyperparameter-search-2020-11-19--09-49-38'
-    #display_hyperparameter_results(path, 10, 10,returns=['optimizer', 'learning_rate'])
-    display_hyperparameter_args(path, returns=['optimizer', 'learning_rate'])
+    path = '/s/chopin/l/grad/kartikay/code/machine_learning/workspace/bci/bci_experiments/bci_experiments/experiments/csu_p300/logs/train-hyperparameter-search-2021-01-23--07-38-35'
+    display_hyperparameter_results(path, 10, 10,returns=['optimizer', 'learning_rate'])
+    #display_hyperparameter_args(path, returns=['optimizer', 'learning_rate'])

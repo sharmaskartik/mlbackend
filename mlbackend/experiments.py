@@ -18,6 +18,7 @@ import mlbackend.util.ensembles as ensembles
 import mlbackend.util.util as util
 from mlbackend.util.io_helper import create_exp_dir
 
+ray.init(local_mode=True, num_gpus=1)
 
 def get_checkpoint_path(checkpoint_dir_path, original_epochs):
     path_to_checkpoint = os.path.join(checkpoint_dir_path, 'checkpoint.pth.tar')
@@ -69,13 +70,16 @@ class SingleSubjectExperiment(object):
         self.metric = metric
         self.criterion = criterion
 
-        train_queue, valid_queue = self.data_loader_method(self.args.dataset_location, self.args.data_filename, self.args)
+        train_queue, valid_queue, test_queue = self.data_loader_method(self.args.dataset_location, self.args.data_filename, self.args)
         self.train_queue = train_queue
         self.valid_queue = valid_queue
+        self.test_queue = test_queue
+
         x, l = next(iter(train_queue))
         model_args = self.args.model_args
         model_args['input_channels'] = x.shape[2]
         self.model = self.model_factory.create_model(model_args) 
+
         self.optimizer = self.optimizer_factory.create_optimizer(self.model, self.args)
         self.scheduler = self.scheduler_factory.create_scheduler(self.optimizer, self.args)
         self.setup()
@@ -122,11 +126,20 @@ class SingleSubjectExperiment(object):
             train_objective, train_loss = self._train()
             self.logging_handle.info('train_acc \t %e \t ' + '\t %f \t' , train_loss, train_objective)
 
-            valid_objective, valid_loss = self._infer()
+
+            valid_objective, valid_loss = self._infer('validation', self.valid_queue)
             self.logging_handle.info('valid_acc \t %e \t ' + '\t %f \t' , valid_loss, valid_objective)
+
+            if self.test_queue is not None:
+
+                test_objective, test_loss = self._infer('test', self.test_queue)
+                self.logging_handle.info('test_acc \t %e \t ' + '\t %f \t' , test_loss, test_objective)
+                self.stats.update_stats(train_loss, train_objective, valid_loss=valid_loss, 
+                                        valid_objective=valid_objective, testing_loss=test_loss, testing_objective=test_objective)
+            else:
+                self.stats.update_stats(train_loss, train_objective, valid_loss, valid_objective)
             self.scheduler.step()
 
-            self.stats.update_stats(train_loss, train_objective, valid_loss, valid_objective)
 
             is_best = False
             best_validation_obj = -1
@@ -186,14 +199,14 @@ class SingleSubjectExperiment(object):
 
         return objective.avg, losses.avg
 
-    def _infer(self):
+    def _infer(self, queue_label, queue):
 
         self.model.eval()
 
         losses = util.AvgrageMeter()
         objective = util.AvgrageMeter()
 
-        for step, (input, targets) in enumerate(self.valid_queue):
+        for step, (input, targets) in enumerate(queue):
 
             with torch.no_grad():
                 input = Variable(input.squeeze(1)).cuda()
@@ -207,7 +220,7 @@ class SingleSubjectExperiment(object):
                 losses.update(loss.item(), n)
                 objective.update(obj[0].item(), n)
                 if step % self.args.report_freq == 0:
-                    self.logging_handle.info('valid  %04d \t %e \t ' +  '\t %f \t' , step, losses.avg,  objective.avg)
+                    self.logging_handle.info('%s  %04d \t %e \t \t %f \t' ,queue_label, step, losses.avg,  objective.avg)
 
 
         self.best_models = ensembles.update_best_models(self.best_models, self.model, objective.avg, self.args.n_models_to_save)
@@ -347,6 +360,7 @@ class HyperparameterExperiment():
             restore_hyperparameter_checkpoint(self, self.args.resume, self.logging_handle)
 
         else:
+            self.args.reps = self.args.folds * (self.args.folds - 1)
             self.subjects = subjects
             self.dataset_location = dataset_location
             self.data_loader_method = data_loader_method
@@ -372,7 +386,7 @@ class HyperparameterExperiment():
             subject_dir = self.subject_string.format(subject)
             for param_idx in range(self.n_params):
                 param_dir =  self.param_string%param_idx
-                for fold in range(self.args.folds):
+                for fold in range(self.args.reps):
 
                     rep_dir = self.rep_string%fold
                     key = param_dir + self.sep + rep_dir
@@ -409,7 +423,7 @@ class HyperparameterExperiment():
         for subject, experiments in self.experiments.items():
             for param_idx in range(self.n_params):
                 param_dir =  self.param_string%param_idx
-                for fold in range(self.args.folds):
+                for fold in range(self.args.reps):
                     rep_dir = self.rep_string%fold
                     key = param_dir + self.sep + rep_dir
                     resume = self.experiments[subject].get(key, None)
@@ -418,6 +432,7 @@ class HyperparameterExperiment():
                     if resume is None:
                         continue
                     args = copy.copy(self.args)
+                    args.fold_id = fold
 
                     args.results_dir = os.path.join(self.parent_results_dir, self.subject_string.format(subject), param_dir)
                     args.dataset_location = self.dataset_location
@@ -447,7 +462,7 @@ class HyperparameterExperiment():
         
         n_actors = len(actors)
         n_finished = 0
-        n_actors_to_run = 20
+        n_actors_to_run = 1
         futures = []
 
         def run_actors(actors, futures, n_actors_to_run):
